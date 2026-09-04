@@ -1,0 +1,13 @@
+product_id,product_name,temperature_sensitive,special_handling,compatibility_group,incompatible_groups
+PRD-001,Insulin Glargine Pen 100U/ml,True,ColdChain,COLD_CHAIN,"HAZMAT,CYTOTOXIC"
+PRD-002,COVID-19 MRNA Vaccine Vials,True,ColdChain,COLD_CHAIN,"HAZMAT,CYTOTOXIC"
+PRD-003,Biologic Infusion Package (Enbrel),True,ColdChain,COLD_CHAIN,"HAZMAT,CYTOTOXIC"
+PRD-004,Amoxicillin 500mg Oral Suspension,False,General,GENERAL,
+PRD-005,Atorvastatin 20mg Tablets,False,General,GENERAL,
+PRD-006,Metformin 850mg Prolonged Release,False,General,GENERAL,
+PRD-007,Lisinopril 10mg Tablets,False,General,GENERAL,
+PRD-008,Methotrexate 2.5mg Tablets (Cytotoxic),False,Cytotoxic,CYTOTOXIC,"COLD_CHAIN,NARCOTIC"
+PRD-009,Tamoxifen Chemotherapy Agent 20mg,False,Cytotoxic,CYTOTOXIC,"COLD_CHAIN,NARCOTIC"
+PRD-010,Morphine Sulfate 10mg/ml Ampoules,False,Narcotic,NARCOTIC,"CYTOTOXIC,HAZMAT"
+PRD-011,Oxycodone HCl 15mg Extended Release,False,Narcotic,NARCOTIC,"CYTOTOXIC,HAZMAT"
+PRD-012,Medical Alcohol Disinfectant 70%,False,Hazmat,HAZMAT,"COLD_CHAIN,NARCOTIC"
