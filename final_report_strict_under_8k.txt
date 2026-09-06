@@ -1,0 +1,104 @@
+1. TITLE
+MEDIROUTE – Constraint-Aware Pharmacy Logistics Control Center
+
+2. ABSTRACT
+Pharmacy delivery batching reduces courier distance and costs but risks missed deadlines, product contamination, compounding delays, overloaded cargo boxes, and rider fatigue. This 35% progress report presents MEDIROUTE, a constraint-aware control center optimizing delivery batching while enforcing five hard operational boundaries: delivery deadlines (with buffer), product compatibility, pickup readiness, rider capacity, and rider workload limits. At the 35% milestone, the database, 5-constraint engine, greedy solver, baseline benchmark, SQLite audit logger, Streamlit UI, and a 14-test-case suite are implemented and verified. Expected outcomes include reduced delivery distance and guaranteed constraint compliance.
+
+3. INTRODUCTION
+Pharmacy delivery is time-critical; delays directly impact patient health. Pharmacies batch prescription orders to minimize delivery mileage and operating costs. Unlike e-commerce, pharmacy delivery involves promised time windows, product exclusions, packaging limits, and compounding delays. Intelligent logistics systems must balance route efficiency with strict operational safety boundaries.
+
+4. PROBLEM STATEMENT
+Distance-only delivery batching focuses purely on proximity, ignoring operational safety rules. This causes six failure modes:
+- Delivery Deadlines: Intermediate stops cause deadline breaches.
+- Product Compatibility: Mixing ColdChain drugs with Hazmat or Cytotoxic compounds creates contamination risks.
+- Pickup Readiness: Early courier dispatch before compounding causes idle depot waiting.
+- Rider Capacity: Exceeding cargo box limits risks package damage or loss.
+- Rider Workload: Excessive route durations cause driver fatigue (capped at 120 minutes driving).
+- Unnecessary Distance: Uncoordinated individual dispatches create redundant travel mileage.
+
+5. OBJECTIVES
+Objectives of MEDIROUTE:
+- Create feasible delivery batches by grouping compatible prescription orders.
+- Enforce five hard operational constraints (deadlines, product groups, pickup readiness, rider capacity, rider workload).
+- Assign orders safely without exceeding box or workload limits.
+- Reduce delivery distance compared to an unconstrained baseline.
+- Maintain an auditable record of batching decisions and rejection rationale.
+- Evaluate system robustness using realistic failure scenarios.
+
+6. EXISTING SYSTEM
+Conventional pharmacy delivery relies on individual dispatching or manual distance-only batching. Individual dispatching requires separate round trips per order, causing high mileage and low fleet utilization. Manual distance batching clusters orders by proximity alone without checking stop delays, product exclusions, compounding readiness, or fatigue caps, causing deadline breaches.
+
+7. PROPOSED SYSTEM
+MEDIROUTE is a constraint-aware control center prioritizing orders by urgency, evaluating candidate insertions against five hard constraints, and optimizing stop sequences. If any constraint is violated, the system rejects the insertion, logs a diagnostic reason, and evaluates alternative assignments. Key modules include order management, constraint validation, priority greedy batching, rider assignment, route planning, SQLite audit trail, baseline benchmarking, and failure testing.
+
+8. METHODOLOGY
+Workflow: Order Ingestion -> Priority Sorting -> Constraint Verification -> Batch Creation -> Rider Assignment -> TSP Route Sequencing -> Validation -> Audit Logging.
+Hard constraints (capacity, product compatibility, pickup readiness delay, deadlines with a 10-minute buffer, and workload limits) are checked BEFORE a batch is considered valid. Only feasible insertions yielding net distance savings are accepted.
+
+9. SYSTEM MODULES
+- Overview: Dashboard displaying orders, active batches, and system status.
+- Orders: Manages prescription orders, priorities, product types, and deadlines.
+- Dispatch Planning: Formulates constraint-compliant plans using priority greedy solving.
+- Routes: Generates stop sequences and timelines using exact TSP permutations.
+- Performance/Baseline Comparison: Benchmarks plans against an unconstrained baseline.
+- Constraint Validation: Executes the 5 hard constraint checkers.
+- Audit Trail: Log viewer for searching transaction histories and rejection reasons.
+- Stakeholder Feedback: Captures survey feedback metrics.
+
+10. TECHNOLOGY USED
+- Python: Core language for logic, constraints, and solver.
+- Streamlit: Web framework for interactive UI.
+- SQLite: Database for persistent storage and audit logs.
+- Pandas: Data manipulation and tabular analysis.
+- Plotly: Interactive charting and visualization.
+- Pytest: Automated testing framework for unit and failure tests.
+
+11. CURRENT IMPLEMENTATION STATUS – 35%
+Work completed at 35% milestone:
+- Streamlit Web Application with an 8-module control center UI.
+- Database & Order Handling using SQLite (pharmacy.db) and synthetic data (500 orders, 20 riders, 30 products).
+- Baseline & Constraint-Aware Batching Engines for evaluation.
+- 5-Hard-Constraint Engine validating capacity, workload, compatibility, readiness, and deadlines.
+- Route Sequencing & Timeline Visualization using TSP permutations (n <= 6).
+- Immutable Audit Logging tracking plan initializations, state changes, and rejection reasons.
+- Failure-Case Simulator evaluating mandatory edge cases.
+- Control Center UI Redesign for visual dispatch management.
+System correctness is verified by a Pytest suite of 14 test cases (all pass).
+
+12. FAILURE CASE VALIDATION
+The system is validated against five failure scenarios:
+1. Tight Delivery Deadline: Rejects batching when added stops breach deadlines.
+2. Incompatible Products: Rejects grouping ColdChain drugs with Hazmat or Cytotoxic compounds.
+3. Pickup Not Ready: Rejects batching orders requiring excessive pickup waiting (>90 mins).
+4. Rider Capacity Exceeded: Rejects batching when order count exceeds box limits.
+5. Rider Workload Exceeded: Rejects routes exceeding the 120-minute continuous driving limit.
+These cases verify MEDIROUTE never improves efficiency by violating safety rules.
+
+13. EXPECTED RESULTS
+As a 35% progress report, numerical results are not fabricated. Expected outcomes are:
+- Reduction in courier travel distance compared to individual dispatching.
+- Creation of valid, constraint-compliant delivery batches with zero hard violations.
+- Safe rider assignments adhering to box capacity and workload fatigue limits.
+- Transparent, auditable log history capturing operational decisions.
+- Demonstrated safety and operational improvement over the baseline.
+
+14. FUTURE WORK
+Future work and enhancements include:
+- Testing on larger real-world datasets.
+- Route optimization and parallelized solving for larger order pools.
+- Stakeholder validation trials with dispatchers and safety officers.
+- Containerization, field deployment, and pilot testing.
+- Improved scalability and real-time dynamic re-batching.
+- Incorporating live traffic updates and GPS tracking.
+
+15. CONCLUSION
+The current 35% implementation establishes the foundation of MEDIROUTE. The 5-hard-constraint engine, greedy solver, baseline benchmark, SQLite audit system, Streamlit UI, and 14-test-case suite are operational. Remaining work focuses on large-scale experimentation, stakeholder validation, performance optimization, and final deployment.
+
+16. REFERENCES
+[1] P. Toth & D. Vigo, Vehicle Routing Problem, SIAM, 2014.
+[2] C. Archetti et al., "VRP with time windows for pharmaceutical distribution," Comput. Oper. Res., 2015.
+[3] M. Savelsbergh & M. Sol, "General pickup and delivery problem," Transp. Sci., 1995.
+[4] T. Vidal et al., "Heuristics for multi-attribute VRP," Eur. J. Oper. Res., 2013.
+[5] G. Ghiani et al., Operations Research in Logistics & Supply Chain Management, Wiley, 2004.
+[6] M. Solomon, "Algorithms for VRPTW," Oper. Res., 1987.
+[7] G. Laporte, "The vehicle routing problem: An overview," Eur. J. Oper. Res., 1992.
