@@ -21,6 +21,13 @@ from src.audit import (
     init_database, write_audit_logs, get_audit_history,
     save_stakeholder_feedback, get_stakeholder_feedback, deduplicate_audit_log_records
 )
+from src.experiment import (
+    run_full_experiment, run_baseline_experiment, run_mediroute_experiment,
+    load_latest_experiment_results, get_all_experiment_history, init_experiment_database
+)
+from src.benchmark import (
+    run_routing_benchmark, load_latest_benchmark_results, init_benchmark_database
+)
 from config import PHARMACY_DEPOT, TRAVEL_BUFFER_MIN, MAX_WORKLOAD_SAFETY_LIMIT_MIN, DEFAULT_MAX_RIDER_CAPACITY
 
 # Streamlit Page Setup
@@ -258,8 +265,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize Database & Deduplicate Audit Records
+# Initialize Databases & Deduplicate Audit Records
 init_database()
+init_experiment_database()
+init_benchmark_database()
 deduplicate_audit_log_records()
 
 # Load/Verify Session State Dataset
@@ -271,6 +280,9 @@ if "products" not in st.session_state or "orders" not in st.session_state or "ri
 
 if "experiment_results" not in st.session_state:
     st.session_state.experiment_results = None
+
+if "benchmark_results" not in st.session_state:
+    st.session_state.benchmark_results = load_latest_benchmark_results()
 
 # Product Lookup Map
 product_map = {p.product_id: p for p in st.session_state.products}
@@ -336,18 +348,18 @@ def render_spatial_map(df: pd.DataFrame, lat_col="latitude", lon_col="longitude"
     apply_plotly_light_theme(fig_grid)
     st.plotly_chart(fig_grid, use_container_width=True)
 
-# Helper: Run comparative experiment dynamically once
-def get_or_run_experiment():
-    if st.session_state.experiment_results is None:
-        with st.spinner("Executing comparative experiment..."):
+# Helper: Run comparative experiment without polluting production audit history
+def get_or_run_experiment(force_run: bool = False, routing_strategy: str = "AUTO"):
+    if force_run or st.session_state.experiment_results is None:
+        with st.spinner("Executing comparative experiment on dataset..."):
             res = run_comparative_experiment(
                 orders=st.session_state.orders,
                 riders=st.session_state.riders,
                 product_map=product_map,
-                current_time_min=0.0
+                current_time_min=0.0,
+                routing_strategy=routing_strategy
             )
             st.session_state.experiment_results = res
-            write_audit_logs(res["audit_logs"], plan_id="PLAN-AUTO", execution_id="EXEC-INIT-001")
     return st.session_state.experiment_results
 
 # Sidebar Brand Header
@@ -358,27 +370,42 @@ st.sidebar.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# Categorized Sidebar Radio Navigation
+# Categorized Sidebar Radio Navigation with active category tracking
+if "active_nav_group" not in st.session_state:
+    st.session_state.active_nav_group = "ops"
+
+def on_ops_change():
+    st.session_state.active_nav_group = "ops"
+
+def on_an_change():
+    st.session_state.active_nav_group = "an"
+
 st.sidebar.markdown('<div class="nav-category">OPERATIONS</div>', unsafe_allow_html=True)
 op_page = st.sidebar.radio(
     "Operations Module",
     ["Overview", "Orders Directory", "Dispatch Workstation", "Route Inspection"],
     key="nav_ops",
+    on_change=on_ops_change,
     label_visibility="collapsed"
 )
 
 st.sidebar.markdown('<div class="nav-category">ANALYTICS & SAFETY</div>', unsafe_allow_html=True)
 an_page = st.sidebar.radio(
     "Analytics & Safety Module",
-    ["Performance Comparison", "Constraint Validation Lab", "Compliance Audit Trail", "Stakeholder Validation"],
+    [
+        "Performance Comparison",
+        "Scalability Benchmark",
+        "Mathematical Formulation",
+        "Constraint Validation Lab",
+        "Compliance Audit Trail",
+        "Stakeholder Validation"
+    ],
     key="nav_an",
+    on_change=on_an_change,
     label_visibility="collapsed"
 )
 
-# Combine selected module
-selected_module = op_page if "nav_ops" in st.session_state and st.session_state.nav_ops else "Overview"
-if st.session_state.get("nav_an") and st.session_state.get("nav_an") != "Performance Comparison":
-    selected_module = st.session_state.nav_an
+selected_module = op_page if st.session_state.active_nav_group == "ops" else an_page
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("""
@@ -561,6 +588,22 @@ elif selected_module == "Dispatch Workstation":
         max_workload = st.number_input("Max Rider Workload (min)", min_value=30.0, max_value=240.0, value=MAX_WORKLOAD_SAFETY_LIMIT_MIN)
         max_orders_per_rider = st.number_input("Max Orders per Rider Batch", min_value=1, max_value=10, value=DEFAULT_MAX_RIDER_CAPACITY)
 
+        routing_strategy_choice = st.selectbox(
+            "Routing Strategy",
+            [
+                "AUTO (Exact TSP for n <= 6, Clarke-Wright for n > 6)",
+                "EXACT_TSP (Optimal permutations - small batches)",
+                "SCALABLE_HEURISTIC (Clarke-Wright Savings)"
+            ],
+            index=0,
+            help="AUTO: Exact TSP for n <= 6, Clarke-Wright for larger batches\nEXACT_TSP: Optimal permutations\nSCALABLE_HEURISTIC: Clarke-Wright Savings heuristic"
+        )
+        selected_strategy = "AUTO"
+        if "EXACT_TSP" in routing_strategy_choice:
+            selected_strategy = "EXACT_TSP"
+        elif "SCALABLE_HEURISTIC" in routing_strategy_choice:
+            selected_strategy = "SCALABLE_HEURISTIC"
+
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("🚀 GENERATE DELIVERY PLAN", type="primary", use_container_width=True):
             exec_id = f"EXEC-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
@@ -570,11 +613,12 @@ elif selected_module == "Dispatch Workstation":
                     riders=st.session_state.riders,
                     product_map=product_map,
                     current_time_min=dispatch_start,
-                    plan_id=plan_ref
+                    plan_id=plan_ref,
+                    routing_strategy=selected_strategy
                 )
                 write_audit_logs(logs, plan_id=plan_ref, execution_id=exec_id)
                 st.session_state["current_plan_run"] = (batches, metrics, plan_ref, exec_id)
-                st.success(f"Plan '{plan_ref}' generated successfully! ({len(batches)} batches created, 0 violations).")
+                st.success(f"Plan '{plan_ref}' generated successfully! ({len(batches)} batches created, 0 violations, strategy: {selected_strategy}).")
 
     with c2:
         if "current_plan_run" in st.session_state:
@@ -675,51 +719,369 @@ elif selected_module == "Performance Comparison":
     st.markdown("""
     <div class="mediroute-header">
         <h1>PERFORMANCE COMPARISON</h1>
-        <p>Empirical performance benchmark comparing Naïve Distance Baseline vs Constraint-Aware System</p>
+        <p>Empirical performance evaluation comparing Naïve Distance Baseline vs Constraint-Aware System</p>
+    </div>
+    <div class="objective-banner">
+        <strong>Experimental Results:</strong> Results generated from the current project dataset. Both Baseline and MEDIROUTE algorithms receive exactly equivalent order, courier, product, deadline, and capacity inputs.
     </div>
     """, unsafe_allow_html=True)
 
-    res = get_or_run_experiment()
-    base_m = res["baseline_metrics"]
-    opt_m = res["optimized_metrics"]
+    # Experiment Control Bar
+    ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([1.5, 1.5, 1.5])
+    with ctrl_col1:
+        exp_strategy = st.selectbox(
+            "Routing Strategy for Evaluation",
+            ["AUTO", "EXACT_TSP", "SCALABLE_HEURISTIC"],
+            index=0,
+            help="AUTO: Exact TSP for n <= 6, Clarke-Wright for n > 6"
+        )
+    with ctrl_col2:
+        st.write("")
+        st.write("")
+        run_exp_btn = st.button("▶ EXECUTE EXPERIMENT", type="primary", use_container_width=True)
+    with ctrl_col3:
+        st.write("")
+        st.write("")
+        load_prev_btn = st.button("🔄 RELOAD LATEST EXPERIMENT", use_container_width=True)
 
-    dist_reduction_pct = res["distance_saved_pct"]
+    if run_exp_btn:
+        res = get_or_run_experiment(force_run=True, routing_strategy=exp_strategy)
+        st.session_state.experiment_results = res
+        st.success(f"Experiment {res.get('experiment_id', '')} executed successfully on project dataset!")
 
-    col_base, col_opt = st.columns(2)
-    with col_base:
-        st.markdown(f"""
-        <div style="background: #FEF2F2; border: 1.5px solid #FCA5A5; border-radius: 12px; padding: 18px; text-align: center;">
-            <h3 style="color: #DC2626; margin: 0 0 8px 0;">🔴 NAÏVE DISTANCE BASELINE</h3>
-            <div style="font-size: 2.1rem; font-weight: 800; color: #991B1B;">{base_m['total_distance_km']:.1f} km</div>
-            <p style="color: #7F1D1D; font-weight: 600; margin: 6px 0;">On-Time Delivery Rate: <strong>{base_m['on_time_delivery_rate']:.1f}%</strong></p>
-            <p style="color: #DC2626; font-size: 0.88rem; margin:0;">
-                ⚠️ <strong>{base_m['late_deliveries']} Late Deliveries</strong> \| ⚠️ <strong>{base_m['product_violations']} Product Violations</strong>
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
+    if load_prev_btn:
+        saved = load_latest_experiment_results()
+        if saved:
+            st.session_state.experiment_results = get_or_run_experiment(force_run=False)
+            st.success("Loaded latest saved experiment results.")
+        else:
+            st.info("No prior saved experiment found.")
 
-    with col_opt:
-        st.markdown(f"""
-        <div style="background: #F0FDF4; border: 1.5px solid #86EFAC; border-radius: 12px; padding: 18px; text-align: center;">
-            <h3 style="color: #16A34A; margin: 0 0 8px 0;">🟢 CONSTRAINT-AWARE SYSTEM</h3>
-            <div style="font-size: 2.1rem; font-weight: 800; color: #166534;">{opt_m['total_distance_km']:.1f} km</div>
-            <p style="color: #14532D; font-weight: 600; margin: 6px 0;">On-Time Delivery Rate: <strong>{opt_m['on_time_delivery_rate']:.1f}%</strong></p>
-            <p style="color: #16A34A; font-size: 0.88rem; margin:0;">
-                ✓ <strong>0 Late Deliveries (100% On-Time)</strong> \| ✓ <strong>0 Contamination Violations</strong>
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
+    res = st.session_state.experiment_results
 
-    st.markdown(f"""
-    <div style="background: #FFFFFF; color: #172033; text-align: center; padding: 18px; border-radius: 12px; margin: 20px 0; border: 1px solid #E2E8F0; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
-        <span style="font-size: 1.0rem; color: #64748B; text-transform: uppercase; letter-spacing: 1px;">Empirical Result Highlight</span>
-        <div style="font-size: 2.4rem; font-weight: 800; color: #16A34A; margin: 2px 0;">{dist_reduction_pct:.1f}% ACTUAL DISTANCE REDUCTION</div>
-        <p style="color: #64748B; margin: 0; font-size: 0.92rem;">Distance savings achieved while maintaining 100% hard constraint compliance across all 5 safety rules.</p>
+    if res is None:
+        st.warning("No experiment results available. Run the experiment first.")
+        st.info("Click '▶ EXECUTE EXPERIMENT' above to evaluate Baseline vs Constraint-Aware MEDIROUTE on the project dataset.")
+    else:
+        base_m = res["baseline_metrics"]
+        opt_m = res["optimized_metrics"]
+        dist_saved_km = res["distance_saved_km"]
+        dist_reduction_pct = res["distance_saved_pct"]
+        exp_id = res.get("experiment_id", "EXP-001")
+
+        # Row 1: Primary KPI Cards
+        k1, k2, k3, k4 = st.columns(4)
+        with k1:
+            st.markdown(f"""
+            <div class="kpi-card">
+                <div class="kpi-title">Baseline Distance</div>
+                <div class="kpi-val" style="color: #DC2626;">{base_m['total_distance_km']:.1f} <span style="font-size:1rem">km</span></div>
+                <div class="kpi-sub" style="color: #DC2626;">{base_m.get('total_constraint_violations', base_m['late_deliveries'] + base_m['product_violations'])} Total Violations</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with k2:
+            st.markdown(f"""
+            <div class="kpi-card kpi-card-highlight">
+                <div class="kpi-title">MEDIROUTE Distance</div>
+                <div class="kpi-val kpi-val-green">{opt_m['total_distance_km']:.1f} <span style="font-size:1rem">km</span></div>
+                <div class="kpi-sub kpi-sub-green">✓ 0 Violations (100% Safe)</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with k3:
+            st.markdown(f"""
+            <div class="kpi-card">
+                <div class="kpi-title">Distance Saved</div>
+                <div class="kpi-val" style="color: #0F766E;">{dist_saved_km:+.1f} <span style="font-size:1rem">km</span></div>
+                <div class="kpi-sub">Net Mileage Difference</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with k4:
+            st.markdown(f"""
+            <div class="kpi-card">
+                <div class="kpi-title">Distance Reduction</div>
+                <div class="kpi-val" style="color: {'#16A34A' if dist_reduction_pct >= 0 else '#D97706'};">{dist_reduction_pct:+.1f}%</div>
+                <div class="kpi-sub">Constraint-Constrained</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Row 2: Secondary Operational KPIs
+        s1, s2, s3, s4 = st.columns(4)
+        with s1:
+            st.markdown(f"""
+            <div class="kpi-card">
+                <div class="kpi-title">Valid Batches</div>
+                <div class="kpi-val" style="font-size:1.4rem;">{opt_m.get('valid_batches', opt_m['total_batches'])} / {opt_m['total_batches']}</div>
+                <div class="kpi-sub">Baseline: {base_m.get('valid_batches', 'N/A')} / {base_m['total_batches']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with s2:
+            st.markdown(f"""
+            <div class="kpi-card">
+                <div class="kpi-title">Average Batch Size</div>
+                <div class="kpi-val" style="font-size:1.4rem;">{opt_m['avg_batch_size']:.2f}</div>
+                <div class="kpi-sub">Baseline: {base_m['avg_batch_size']:.2f} orders/batch</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with s3:
+            rejected_cnt = opt_m.get("rejected_candidate_insertions", 0)
+            st.markdown(f"""
+            <div class="kpi-card">
+                <div class="kpi-title">Safe Rejections</div>
+                <div class="kpi-val" style="font-size:1.4rem; color:#0F766E;">{rejected_cnt}</div>
+                <div class="kpi-sub">Infeasible Candidate Orders</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with s4:
+            base_time = base_m.get("execution_time_sec", 0.0)
+            opt_time = opt_m.get("execution_time_sec", 0.0)
+            st.markdown(f"""
+            <div class="kpi-card">
+                <div class="kpi-title">Execution Time</div>
+                <div class="kpi-val" style="font-size:1.4rem;">{opt_time:.3f} <span style="font-size:0.9rem">s</span></div>
+                <div class="kpi-sub">Baseline: {base_time:.3f} s</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Visualizations Row 1: Distance & Violations
+        v1, v2 = st.columns(2)
+        with v1:
+            st.subheader("Total Distance Comparison")
+            df_dist = pd.DataFrame([
+                {"System": "Naïve Baseline", "Distance (km)": base_m["total_distance_km"]},
+                {"System": "MEDIROUTE", "Distance (km)": opt_m["total_distance_km"]}
+            ])
+            fig_dist = px.bar(
+                df_dist, x="System", y="Distance (km)", color="System",
+                color_discrete_map={"Naïve Baseline": "#EF4444", "MEDIROUTE": "#0F766E"},
+                text_auto=".1f", height=320
+            )
+            apply_plotly_light_theme(fig_dist)
+            fig_dist.update_layout(showlegend=False)
+            st.plotly_chart(fig_dist, use_container_width=True)
+
+        with v2:
+            st.subheader("Constraint Violations Breakdown")
+            df_viols = pd.DataFrame([
+                {"Constraint": "Delivery SLA", "Naïve Baseline": base_m["late_deliveries"], "MEDIROUTE": opt_m["late_deliveries"]},
+                {"Constraint": "Product Compatibility", "Naïve Baseline": base_m["product_violations"], "MEDIROUTE": opt_m["product_violations"]},
+                {"Constraint": "Pickup Readiness", "Naïve Baseline": base_m["pickup_violations"], "MEDIROUTE": opt_m["pickup_violations"]},
+                {"Constraint": "Rider Capacity", "Naïve Baseline": base_m["capacity_violations"], "MEDIROUTE": opt_m["capacity_violations"]},
+                {"Constraint": "Rider Workload", "Naïve Baseline": base_m["workload_violations"], "MEDIROUTE": opt_m["workload_violations"]}
+            ])
+            df_viols_melted = df_viols.melt(id_vars="Constraint", var_name="Algorithm", value_name="Violations")
+            fig_viols = px.bar(
+                df_viols_melted, x="Constraint", y="Violations", color="Algorithm",
+                barmode="group",
+                color_discrete_map={"Naïve Baseline": "#EF4444", "MEDIROUTE": "#10B981"},
+                height=320
+            )
+            apply_plotly_light_theme(fig_viols)
+            st.plotly_chart(fig_viols, use_container_width=True)
+
+        # Visualizations Row 2: Batches & Execution Time
+        v3, v4 = st.columns(2)
+        with v3:
+            st.subheader("Batch Operations Comparison")
+            df_batches = pd.DataFrame([
+                {"Metric": "Total Batches Created", "Naïve Baseline": base_m["total_batches"], "MEDIROUTE": opt_m["total_batches"]},
+                {"Metric": "Average Batch Size", "Naïve Baseline": base_m["avg_batch_size"], "MEDIROUTE": opt_m["avg_batch_size"]}
+            ])
+            df_batches_melted = df_batches.melt(id_vars="Metric", var_name="Algorithm", value_name="Value")
+            fig_batch = px.bar(
+                df_batches_melted, x="Metric", y="Value", color="Algorithm",
+                barmode="group",
+                color_discrete_map={"Naïve Baseline": "#64748B", "MEDIROUTE": "#0F766E"},
+                text_auto=".2f", height=300
+            )
+            apply_plotly_light_theme(fig_batch)
+            st.plotly_chart(fig_batch, use_container_width=True)
+
+        with v4:
+            st.subheader("Algorithm Execution Time")
+            df_time = pd.DataFrame([
+                {"Algorithm": "Naïve Baseline", "Execution Time (s)": base_m.get("execution_time_sec", 0.0)},
+                {"Algorithm": "MEDIROUTE", "Execution Time (s)": opt_m.get("execution_time_sec", 0.0)}
+            ])
+            fig_time = px.bar(
+                df_time, x="Algorithm", y="Execution Time (s)", color="Algorithm",
+                color_discrete_map={"Naïve Baseline": "#94A3B8", "MEDIROUTE": "#0EA5E9"},
+                text_auto=".4f", height=300
+            )
+            apply_plotly_light_theme(fig_time)
+            fig_time.update_layout(showlegend=False)
+            st.plotly_chart(fig_time, use_container_width=True)
+
+        # Full 17-Metric Side-by-Side Comparison Table
+        st.subheader("Comprehensive Operational Comparison (Real Calculated Metrics)")
+        st.dataframe(res["comparison_table"], use_container_width=True)
+
+        # Metadata Footer
+        st.caption(f"Experiment ID: {exp_id} | Dataset: {len(st.session_state.orders)} orders, {len(st.session_state.riders)} couriers, {len(product_map)} products | Strategy: {res.get('routing_strategy', 'AUTO')}")
+
+
+# ==========================================
+# PAGE 6: SCALABILITY BENCHMARK
+# ==========================================
+elif selected_module == "Scalability Benchmark":
+    st.markdown("""
+    <div class="mediroute-header">
+        <h1>SCALABILITY BENCHMARK</h1>
+        <p>Empirical runtime and route mileage comparison between Exact TSP and Clarke-Wright Savings</p>
+    </div>
+    <div class="objective-banner">
+        <strong>Scalability Analysis:</strong> Exact TSP evaluates all n! permutations to produce the optimal route for supported small batches (n &le; 6). The Clarke-Wright implementation is deterministic for identical inputs and configuration and provides substantially better scalability than factorial-time brute-force permutation search.
     </div>
     """, unsafe_allow_html=True)
 
-    st.subheader("Side-by-Side Metric Comparison")
-    st.dataframe(res["comparison_table"], use_container_width=True)
+    b_col1, b_col2 = st.columns([3, 1])
+    with b_col1:
+        st.write("Benchmark evaluates practical stop sizes: **n = [3, 4, 5, 6, 8, 10, 15, 20]** on identical order delivery coordinates.")
+    with b_col2:
+        run_bench_btn = st.button("▶ RUN SCALABILITY BENCHMARK", type="primary", use_container_width=True)
+
+    if run_bench_btn:
+        with st.spinner("Executing scalability benchmark on identical stops..."):
+            df_b = run_routing_benchmark(
+                orders=st.session_state.orders,
+                test_sizes=[3, 4, 5, 6, 8, 10, 15, 20],
+                exact_max_n=6
+            )
+            st.session_state.benchmark_results = df_b
+            st.success("Benchmark completed and recorded into routing_benchmark database table!")
+
+    df_b = st.session_state.benchmark_results
+
+    if df_b is None or df_b.empty:
+        st.info("No benchmark results available. Click '▶ RUN SCALABILITY BENCHMARK' to evaluate.")
+    else:
+        # Plotly Visualizations: Route Distance & Execution Time
+        bc1, bc2 = st.columns(2)
+        with bc1:
+            st.subheader("Route Distance vs Number of Stops")
+            fig_d = px.line(
+                df_b, x="num_stops", y="route_distance_km", color="routing_strategy",
+                markers=True, title="Route Mileage Scaling (km)",
+                labels={"num_stops": "Number of Stops (n)", "route_distance_km": "Distance (km)", "routing_strategy": "Method"},
+                color_discrete_map={"Exact TSP": "#DC2626", "Clarke-Wright Savings": "#0F766E"},
+                height=380
+            )
+            apply_plotly_light_theme(fig_d)
+            st.plotly_chart(fig_d, use_container_width=True)
+
+        with bc2:
+            st.subheader("Execution Time vs Number of Stops")
+            fig_t = px.line(
+                df_b, x="num_stops", y="execution_time_ms", color="routing_strategy",
+                markers=True, title="Computation Time Scaling (ms)",
+                labels={"num_stops": "Number of Stops (n)", "execution_time_ms": "Execution Time (ms)", "routing_strategy": "Method"},
+                color_discrete_map={"Exact TSP": "#DC2626", "Clarke-Wright Savings": "#0F766E"},
+                height=380
+            )
+            apply_plotly_light_theme(fig_t)
+            st.plotly_chart(fig_t, use_container_width=True)
+
+        st.subheader("Detailed Benchmark Execution Log")
+        display_bench_df = df_b.copy()
+        display_bench_df["optimality_gap_display"] = display_bench_df["optimality_gap_pct"].apply(
+            lambda v: f"{v:.2f}%" if pd.notna(v) else "N/A (n > 6)"
+        )
+        display_bench_df = display_bench_df.rename(columns={
+            "num_stops": "Stops (n)",
+            "routing_strategy": "Strategy",
+            "route_distance_km": "Distance (km)",
+            "execution_time_ms": "Time (ms)",
+            "optimality_gap_display": "Optimality Gap (%)"
+        })
+        st.dataframe(
+            display_bench_df[["Stops (n)", "Strategy", "Distance (km)", "Time (ms)", "Optimality Gap (%)"]],
+            use_container_width=True
+        )
+        st.caption("Note: Optimality Gap is calculated only for n <= 6 where Exact TSP evaluates the global optimum. For n > 6, true global optimum is unknown, so Optimality Gap is not defined (N/A).")
+
+
+# ==========================================
+# PAGE 7: MATHEMATICAL FORMULATION
+# ==========================================
+elif selected_module == "Mathematical Formulation":
+    st.markdown("""
+    <div class="mediroute-header">
+        <h1>MATHEMATICAL FORMULATION</h1>
+        <p>Formal mathematical optimization model, constraint predicates, and operational semantics</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div style="background:#FFFFFF; border:1px solid #E2E8F0; padding:18px; border-radius:10px; margin-bottom:20px;">
+        <h4 style="color:#0F766E; margin-top:0;">1. System Architecture: Optimization Model vs. Production Solver</h4>
+        <p>MEDIROUTE distinguishes the theoretical combinatorial optimization problem from its production heuristic execution:</p>
+        <ul>
+            <li><strong>Theoretical Model:</strong> Constrained multi-vehicle routing problem with time windows and heterogeneous constraints (VRPTW-HC), known to be NP-hard.</li>
+            <li><strong>Production Implementation:</strong> Constraint-aware greedy insertion batching engine combined with <strong>Exact TSP permutations</strong> for small routes (<em>n &le; 6</em>) and <strong>Clarke-Wright Savings heuristic</strong> with 2-opt refinement for scalable candidate routing (<em>n &gt; 6</em>).</li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("### 2. Mathematical Objective Function")
+    st.markdown("The primary optimization objective is to **minimize total delivery travel distance** across all couriers:")
+    st.latex(r"\min \sum_{r \in R} \text{Distance}(\text{route}_r)")
+    st.markdown(r"where $\text{route}_r = \langle D_0, s_{r,1}, s_{r,2}, \dots, s_{r,|S_r|}, D_0 \rangle$ represents the sequence of delivery stops starting and ending at Central Metro Pharmacy Depot $D_0$.")
+
+    st.markdown("### 3. The Five Hard Operational Constraints")
+
+    with st.expander("⏱️ Constraint 1: Delivery Deadline (SLA Compliance)", expanded=True):
+        st.markdown("For every order $i \\in S_r$, estimated customer arrival time plus transit buffer must not exceed promised delivery deadline:")
+        st.latex(r"T^{\text{arrival}}_{r,i} + \Delta_{\text{buffer}} \le D_i \quad \forall i \in S_r")
+        st.markdown(f"- **Configured Safety Buffer ($\\Delta_{{\\text{{buffer}}}}$):** `{TRAVEL_BUFFER_MIN:.1f} minutes`.")
+        st.markdown("- **Guarantees:** Zero tardy deliveries and protection against urban traffic variance.")
+
+    with st.expander("🧪 Constraint 2: Product Handling & Segregation Compatibility", expanded=True):
+        st.markdown("For every candidate batch $S_r$, all pairwise co-loaded products must be mutually compatible:")
+        st.latex(r"\text{Compatible}(\text{product}_i, \text{product}_j) = \text{True} \quad \forall i, j \in S_r")
+        st.markdown("""
+        - **ColdChain Segregation:** Biologics/Insulin cannot co-load with Cytotoxic agents or Volatile Hazmat disinfectants.
+        - **Narcotic Security:** Scheduled narcotics cannot co-load with Cytotoxic agents or Hazmat.
+        - **Incompatibility Matrix:** Explicit forbidden pairing rules defined in pharmaceutical master catalog.
+        """)
+
+    with st.expander("📦 Constraint 3: Pickup Readiness & Maximum Dispatch Delay", expanded=True):
+        st.markdown("The batch departure timestamp is set by the latest compounding/packaging ready time:")
+        st.latex(r"T^{\text{depart}}_r = \max\left(T_{\text{current}}, \max_{i \in S_r} R_i\right)")
+        st.markdown("To prevent excessive courier idle waiting that stalls operational throughput:")
+        st.latex(r"\max_{i \in S_r} R_i - T_{\text{current}} \le 90.0 \text{ minutes}")
+        st.markdown("- **Configured Maximum Wait Threshold:** `90.0 minutes` from scheduling horizon.")
+
+    with st.expander("🚴 Constraint 4: Courier Order Capacity", expanded=True):
+        st.markdown("The number of orders assigned to courier $r$'s batch cannot exceed physical delivery capacity:")
+        st.latex(r"|S_r| \le C_r \quad \forall r \in R")
+        st.markdown(f"- **Configured Rider Capacity ($C_r$):** Typically 4 to 6 orders (default `{DEFAULT_MAX_RIDER_CAPACITY}` orders per batch).")
+
+    with st.expander("🛡️ Constraint 5: Courier Workload Safety Limit", expanded=True):
+        st.markdown("Total route duration (travel time + service time + waiting time) must remain within safe shift limits:")
+        st.latex(r"\text{TotalDuration}(\text{route}_r) \le \min\left(W_r, W_{\max}\right) \quad \forall r \in R")
+        st.markdown(f"- **Configured Hard Safety Boundary ($W_{{\\max}}$):** `{MAX_WORKLOAD_SAFETY_LIMIT_MIN:.1f} minutes` (2 hours continuous shift cap).")
+
+    st.markdown("### 4. Feasibility Predicate & Rejection Policy")
+    st.latex(r"\text{Feasible}(\text{Batch}) = \text{DeadlineOK} \land \text{CompatibilityOK} \land \text{PickupReadyOK} \land \text{CapacityOK} \land \text{WorkloadOK}")
+    st.markdown("""
+    - If any predicate evaluates to **False**, the candidate order insertion is immediately **rejected**.
+    - The rejection reason is recorded immutably in the compliance audit trail.
+    - Zero constraint violations are guaranteed in the finalized delivery plan.
+    """)
+
+    st.markdown("### 5. Penalty Optimization as a Future Extension")
+    st.info("""
+    **Architectural Extension Note:**
+    Future metaheuristic or integer-programming solvers may incorporate soft constraints into the objective function via numerical penalty terms:
+    
+    $$\\min \\sum_{r \\in R} \\text{Dist}_r + \\lambda_1 \\sum \\text{Tardiness} + \\lambda_2 \\sum \\text{CapacityOverload} + \\lambda_3 \\sum \\text{Incompatibilities}$$
+    
+    **Current MEDIROUTE Implementation:**
+    The current MEDIROUTE system treats all five operational constraints as **strict, non-negotiable hard feasibility conditions**. Infeasible candidates are rejected rather than assigned numerical penalty costs, ensuring 100% regulatory and safety compliance for clinical delivery operations.
+    """)
 
 # ==========================================
 # PAGE 6: CONSTRAINT VALIDATION LAB

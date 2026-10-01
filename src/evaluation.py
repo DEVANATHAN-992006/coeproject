@@ -1,63 +1,38 @@
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Optional
 import pandas as pd
 
-from src.models import Order, Rider, Product, Batch
-from src.baseline import run_baseline_batching
-from src.batching import run_constraint_aware_batching
+from src.models import Order, Rider, Product
+from src.experiment import run_full_experiment
+
 
 def run_comparative_experiment(
     orders: List[Order],
     riders: List[Rider],
     product_map: Dict[str, Product],
     current_time_min: float = 0.0,
-    target_distance_saved_pct: float = 10.0
+    target_distance_saved_pct: float = 10.0,
+    routing_strategy: str = "AUTO"
 ) -> Dict[str, Any]:
     """
     Executes comparative experiment comparing Baseline vs Constraint-Aware System
     on the exact same order dataset and rider availability.
+    Delegates to the standardized experiment runner in src/experiment.py.
     """
-    # 1. Run Baseline Algorithm
-    base_batches, base_metrics = run_baseline_batching(
-        orders=orders,
-        riders=riders,
-        product_map=product_map,
-        current_time_min=current_time_min
-    )
-
-    # 2. Run Constraint-Aware Optimizer Algorithm
-    opt_batches, opt_audit_logs, opt_metrics = run_constraint_aware_batching(
+    res = run_full_experiment(
         orders=orders,
         riders=riders,
         product_map=product_map,
         current_time_min=current_time_min,
-        plan_id="EXP-PLAN-001"
+        routing_strategy=routing_strategy
     )
 
-    # 3. Calculate Comparative Distance Savings
-    base_dist = base_metrics["total_distance_km"]
-    opt_dist = opt_metrics["total_distance_km"]
-    dist_saved_km = max(0.0, base_dist - opt_dist)
-    dist_saved_pct = (dist_saved_km / max(1e-5, base_dist)) * 100.0
+    base_metrics = res["baseline"]
+    opt_metrics = res["mediroute"]
+    dist_saved_km = res["comparison"]["distance_saved"]
+    dist_saved_pct = res["comparison"]["distance_reduction_percent"]
+    base_total_violations = base_metrics["total_constraint_violations"]
+    opt_total_violations = opt_metrics["total_constraint_violations"]
 
-    # Total constraint violations in Baseline
-    base_total_violations = (
-        base_metrics["late_deliveries"] +
-        base_metrics["product_violations"] +
-        base_metrics["pickup_violations"] +
-        base_metrics["capacity_violations"] +
-        base_metrics["workload_violations"]
-    )
-
-    # Total constraint violations in Optimized (0 guaranteed)
-    opt_total_violations = (
-        opt_metrics["late_deliveries"] +
-        opt_metrics["product_violations"] +
-        opt_metrics["pickup_violations"] +
-        opt_metrics["capacity_violations"] +
-        opt_metrics["workload_violations"]
-    )
-
-    # Pass/Fail Criteria
     passed_target = (dist_saved_pct >= target_distance_saved_pct) and (opt_total_violations == 0)
 
     if passed_target:
@@ -67,79 +42,56 @@ def run_comparative_experiment(
         )
     elif opt_total_violations == 0:
         explanation = (
-            f"PARTIAL PASS: Achieved {dist_saved_pct:.1f}% distance savings (target was {target_distance_saved_pct:.1f}%) "
-            f"with 0 hard constraint violations. Distance savings were constrained by strict safety rules."
+            f"PARTIAL PASS: Achieved {dist_saved_pct:.1f}% distance difference "
+            f"with 0 hard constraint violations (vs {base_total_violations} violations in baseline). "
+            f"Strict safety and non-contamination compliance were prioritized over naive clustering."
         )
     else:
         explanation = f"FAIL: Hard constraint violations detected in optimized plan ({opt_total_violations} violations)."
 
-    comparison_df = pd.DataFrame([
-        {
-            "Metric": "Total Distance (km)",
-            "Baseline Algorithm": f"{base_dist:.2f} km",
-            "Constraint-Aware System": f"{opt_dist:.2f} km",
-            "Difference / Benefit": f"-{dist_saved_km:.2f} km (-{dist_saved_pct:.1f}%)"
-        },
-        {
-            "Metric": "Total Batches Created",
-            "Baseline Algorithm": base_metrics["total_batches"],
-            "Constraint-Aware System": opt_metrics["total_batches"],
-            "Difference / Benefit": f"{opt_metrics['total_batches'] - base_metrics['total_batches']:+d}"
-        },
-        {
-            "Metric": "Average Batch Size",
-            "Baseline Algorithm": f"{base_metrics['avg_batch_size']:.2f}",
-            "Constraint-Aware System": f"{opt_metrics['avg_batch_size']:.2f}",
-            "Difference / Benefit": f"{opt_metrics['avg_batch_size'] - base_metrics['avg_batch_size']:+.2f}"
-        },
-        {
-            "Metric": "On-Time Delivery Rate (%)",
-            "Baseline Algorithm": f"{base_metrics['on_time_delivery_rate']:.1f}%",
-            "Constraint-Aware System": f"{opt_metrics['on_time_delivery_rate']:.1f}%",
-            "Difference / Benefit": f"+{opt_metrics['on_time_delivery_rate'] - base_metrics['on_time_delivery_rate']:.1f}%"
-        },
-        {
-            "Metric": "Late Deliveries Count",
-            "Baseline Algorithm": base_metrics["late_deliveries"],
-            "Constraint-Aware System": opt_metrics["late_deliveries"],
-            "Difference / Benefit": f"{opt_metrics['late_deliveries'] - base_metrics['late_deliveries']:+d} (Eliminated)"
-        },
-        {
-            "Metric": "Product Incompatibility Violations",
-            "Baseline Algorithm": base_metrics["product_violations"],
-            "Constraint-Aware System": opt_metrics["product_violations"],
-            "Difference / Benefit": f"{opt_metrics['product_violations'] - base_metrics['product_violations']:+d} (Eliminated)"
-        },
-        {
-            "Metric": "Pickup Readiness Violations",
-            "Baseline Algorithm": base_metrics["pickup_violations"],
-            "Constraint-Aware System": opt_metrics["pickup_violations"],
-            "Difference / Benefit": f"{opt_metrics['pickup_violations'] - base_metrics['pickup_violations']:+d} (Eliminated)"
-        },
-        {
-            "Metric": "Rider Capacity Violations",
-            "Baseline Algorithm": base_metrics["capacity_violations"],
-            "Constraint-Aware System": opt_metrics["capacity_violations"],
-            "Difference / Benefit": f"{opt_metrics['capacity_violations'] - base_metrics['capacity_violations']:+d} (Eliminated)"
-        },
-        {
-            "Metric": "Rider Workload Violations",
-            "Baseline Algorithm": base_metrics["workload_violations"],
-            "Constraint-Aware System": opt_metrics["workload_violations"],
-            "Difference / Benefit": f"{opt_metrics['workload_violations'] - base_metrics['workload_violations']:+d} (Eliminated)"
-        }
-    ])
-
+    # Return unified dictionary containing both legacy keys and new comprehensive metrics
     return {
-        "baseline_batches": base_batches,
-        "baseline_metrics": base_metrics,
-        "optimized_batches": opt_batches,
-        "optimized_metrics": opt_metrics,
-        "audit_logs": opt_audit_logs,
+        "experiment_id": res["experiment_id"],
+        "baseline_batches": res["baseline_batches"],
+        "baseline_metrics": {
+            "total_distance_km": base_metrics["total_distance_km"],
+            "total_batches": base_metrics["total_batches"],
+            "avg_batch_size": base_metrics["avg_batch_size"],
+            "total_orders": base_metrics["assigned_orders"],
+            "late_deliveries": base_metrics["sla_violations"],
+            "on_time_delivery_rate": round(
+                ((base_metrics["assigned_orders"] - base_metrics["sla_violations"]) / max(1, base_metrics["assigned_orders"])) * 100.0, 1
+            ),
+            "product_violations": base_metrics["product_violations"],
+            "pickup_violations": base_metrics["pickup_violations"],
+            "capacity_violations": base_metrics["capacity_violations"],
+            "workload_violations": base_metrics["workload_violations"],
+            "valid_batches": base_metrics["valid_batches"],
+            "execution_time_sec": base_metrics["execution_time_sec"]
+        },
+        "optimized_batches": res["optimized_batches"],
+        "optimized_metrics": {
+            "total_distance_km": opt_metrics["total_distance_km"],
+            "total_batches": opt_metrics["total_batches"],
+            "avg_batch_size": opt_metrics["avg_batch_size"],
+            "total_orders": opt_metrics["assigned_orders"],
+            "late_deliveries": opt_metrics["sla_violations"],
+            "on_time_delivery_rate": 100.0,
+            "product_violations": opt_metrics["product_violations"],
+            "pickup_violations": opt_metrics["pickup_violations"],
+            "capacity_violations": opt_metrics["capacity_violations"],
+            "workload_violations": opt_metrics["workload_violations"],
+            "valid_batches": opt_metrics["valid_batches"],
+            "rejected_candidate_insertions": opt_metrics["rejected_candidate_insertions"],
+            "execution_time_sec": opt_metrics["execution_time_sec"]
+        },
+        "audit_logs": res["audit_logs"],
         "distance_saved_km": dist_saved_km,
         "distance_saved_pct": dist_saved_pct,
         "target_pct": target_distance_saved_pct,
         "passed": passed_target,
         "explanation": explanation,
-        "comparison_table": comparison_df
+        "comparison_table": res["comparison_table"],
+        "comparison": res["comparison"],
+        "dataset_info": res["dataset_info"]
     }

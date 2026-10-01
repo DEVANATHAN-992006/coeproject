@@ -1,0 +1,13 @@
+num_stops,routing_strategy,route_distance_km,execution_time_ms,optimality_gap_pct
+3,Exact TSP,26.339,0.042,0.0
+3,Clarke-Wright Savings,26.339,0.036,0.0
+4,Exact TSP,31.752,0.112,0.0
+4,Clarke-Wright Savings,31.752,0.032,0.0
+5,Exact TSP,31.774,0.705,0.0
+5,Clarke-Wright Savings,31.774,0.066,0.0
+6,Exact TSP,31.806,4.303,0.0
+6,Clarke-Wright Savings,31.806,0.057,0.0
+8,Clarke-Wright Savings,40.616,0.088,
+10,Clarke-Wright Savings,41.939,0.145,
+15,Clarke-Wright Savings,50.581,0.38,
+20,Clarke-Wright Savings,53.455,0.623,

@@ -11,7 +11,8 @@ def run_constraint_aware_batching(
     riders: List[Rider],
     product_map: Dict[str, Product],
     current_time_min: float = 0.0,
-    plan_id: str = "PLAN-001"
+    plan_id: str = "PLAN-001",
+    routing_strategy: str = "AUTO"
 ) -> Tuple[List[Batch], List[Dict], Dict[str, float]]:
     """
     Executes the Constraint-Aware Batching Algorithm:
@@ -73,7 +74,8 @@ def run_constraint_aware_batching(
                 rider=rider,
                 current_time_min=current_time_min,
                 product_map=product_map,
-                apply_buffer=True
+                apply_buffer=True,
+                routing_strategy=routing_strategy
             )
 
             if constraint_res.feasible:
@@ -134,7 +136,8 @@ def run_constraint_aware_batching(
                 rider=rider,
                 current_time_min=current_time_min,
                 product_map=product_map,
-                apply_buffer=True
+                apply_buffer=True,
+                routing_strategy=routing_strategy
             )
 
             if constraint_res.feasible:

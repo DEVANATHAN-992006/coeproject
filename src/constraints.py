@@ -70,7 +70,8 @@ def validate_batch_constraints(
     rider: Rider,
     current_time_min: float = 0.0,
     product_map: Optional[Dict[str, Product]] = None,
-    apply_buffer: bool = True
+    apply_buffer: bool = True,
+    routing_strategy: str = "AUTO"
 ) -> ConstraintResult:
     """
     Comprehensive Constraint Checker evaluating all 5 mandatory operational constraints:
@@ -113,7 +114,8 @@ def validate_batch_constraints(
         departure_time_min=departure_time,
         depot_lat=rider.current_latitude,
         depot_lon=rider.current_longitude,
-        apply_buffer=apply_buffer
+        apply_buffer=apply_buffer,
+        routing_strategy=routing_strategy
     )
 
     time_ok = route.is_feasible

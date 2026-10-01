@@ -10,7 +10,8 @@ def run_baseline_batching(
     orders: List[Order],
     riders: List[Rider],
     product_map: Dict[str, Product],
-    current_time_min: float = 0.0
+    current_time_min: float = 0.0,
+    routing_strategy: str = "AUTO"
 ) -> Tuple[List[Batch], Dict[str, float]]:
     """
     Simulates legacy distance-based batching:
@@ -63,7 +64,8 @@ def run_baseline_batching(
             departure_time_min=dep_time,
             depot_lat=rider.current_latitude,
             depot_lon=rider.current_longitude,
-            apply_buffer=False
+            apply_buffer=False,
+            routing_strategy=routing_strategy
         )
 
         batch_id = f"BASE-B{batch_counter:03d}"
